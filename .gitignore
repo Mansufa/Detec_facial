@@ -12,11 +12,23 @@ __pycache__/
 
 # Ambientes virtuais
 venv/
+.venv/
 env/
 ENV/
 
-# Relatórios e dados temporários
+# Relatórios gerados
+relatorio_*.json
+relatorio_*.txt
+analysis_report.*
+audio_analysis_report.*
+RELATORIO_FINAL_INTEGRADO.*
+
+# Dados temporários
 *.log
+*_audio.wav
+
+# Modelos baixados
+*.pt
 
 # Arquivos do sistema
 .DS_Store

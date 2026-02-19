@@ -1,265 +1,163 @@
-# Sistema de Análise de Vídeos
-## Detecção de Sinais de Depressão, Violência Doméstica e Problemas de Saúde
+# Sistema Multimodal de Triagem — Saúde da Mulher
 
-Este sistema utiliza inteligência artificial para analisar vídeos e detectar:
-- **Sinais de Depressão**: Através de expressões faciais e análise de fala
-- **Hematomas**: Possíveis indicadores de violência doméstica
-- **Marcas e Machucados**: Sinais de problemas de saúde
+Sistema de análise multimodal (vídeo + áudio) para detecção precoce de sinais de **depressão**, **violência doméstica** e **problemas de saúde**, voltado para o contexto da saúde feminina.
 
-## ⚠️ AVISO IMPORTANTE
+> **Triagem automatizada** — NÃO substitui avaliação profissional.
 
-Esta ferramenta é um **sistema de apoio e triagem**, **NÃO substitui avaliação profissional**. 
-Em caso de risco, procure ajuda profissional imediatamente:
-- **CVV (Valorização da Vida)**: 188 (24h)
-- **Central de Atendimento à Mulher**: 180
-- **SAMU**: 192
-- **Polícia Militar**: 190
+## Objetivos Atendidos (POS TECH — Tech Challenge Fase 4)
 
-## 📋 Requisitos
+| # | Objetivo | Como é atendido |
+|---|----------|-----------------|
+| 2 | Identificar sinais de violência doméstica | Detecção de hematomas/marcas via YOLOv8 + análise HSV |
+| 3 | Monitorar bem-estar psicológico feminino | Expressões faciais (MediaPipe) + análise linguística (Whisper) |
+| 5 | Detecção de anomalias para monitoramento preventivo | Pipeline automatizado com sistema de alertas por nível de risco |
 
-- Python 3.8 ou superior
-- FFmpeg (para extração de áudio)
+## Arquitetura / Fluxo Multimodal
 
-## 🚀 Instalação
+```
+Vídeo (MP4)
+  │
+  ├─► YOLOv8 (detecção de pessoa no frame)
+  │     └─► MediaPipe FaceMesh (landmarks faciais)
+  │           ├─► Análise de expressão (eye aspect ratio, mouth ratio)
+  │           └─► Detecção de anomalias na pele (HSV: hematomas, marcas)
+  │
+  ├─► FFmpeg (extração de áudio)
+  │     └─► Whisper base (transcrição local PT-BR)
+  │           ├─► Análise linguística (keywords depressão/violência/pós-parto)
+  │           └─► Detecção de hesitações e padrões negativos
+  │
+  └─► librosa (features vocais: pitch, energia, pausas)
+        └─► Indicadores de tristeza/fadiga vocal
 
-### 1. Instalar Python
-Certifique-se de ter Python 3.8+ instalado: `python --version`
+  Fusão Multimodal: score_visual × 0.4 + score_audio × 0.6
+  └─► Relatório integrado com nível de risco e recomendações
+```
 
-### 2. Instalar Dependências Python
+## Modelos Utilizados
+
+| Modelo | Tipo de dado | Função |
+|--------|-------------|--------|
+| **YOLOv8n** (ultralytics) | Vídeo | Detecção de pessoas no frame (pré-filtro) |
+| **MediaPipe FaceMesh** | Vídeo | 468 landmarks faciais para análise de expressão |
+| **Haar Cascade** (OpenCV) | Vídeo | Fallback quando MediaPipe falha |
+| **Whisper base** (OpenAI) | Áudio | Transcrição local em português |
+| **librosa** | Áudio | Extração de features vocais (pitch, energia, ZCR) |
+| **Rule-based NLP** | Texto | Detecção de palavras-chave e padrões linguísticos |
+
+## Requisitos
+
+- Python 3.11+
+- FFmpeg instalado no sistema (`brew install ffmpeg` no macOS)
+- ~500MB de espaço para modelos (YOLOv8n + Whisper base)
+
+## Instalação (macOS)
+
 ```bash
+# 1. Clonar o repositório
+git clone <repo-url>
+cd Detec_facial
+
+# 2. Criar e ativar ambiente virtual
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 3. Instalar FFmpeg (se não tiver)
+brew install ffmpeg
+
+# 4. Instalar dependências Python
 pip install -r requirements.txt
+
+# 5. Colocar o vídeo na pasta data/
+mkdir -p data
+# copie o vídeo .mp4 para data/
 ```
 
-### 3. Instalar FFmpeg (Windows)
+## Execução
 
-**Opção 1 - Usando Chocolatey:**
 ```bash
-choco install ffmpeg
+# Análise completa (vídeo + áudio)
+python main_analysis.py
+
+# Apenas vídeo
+python -c "
+from video_analysis import VideoAnalyzer
+v = VideoAnalyzer('data/seu_video.mp4')
+v.analyze()
+v.generate_report()
+"
 ```
 
-**Opção 2 - Download Manual:**
-1. Baixe o FFmpeg em: https://ffmpeg.org/download.html
-2. Extraia para `C:\ffmpeg`
-3. Adicione `C:\ffmpeg\bin` ao PATH do sistema
+## Relatórios Gerados
 
-Para verificar a instalação:
-```bash
-ffmpeg -version
-```
+| Arquivo | Conteúdo |
+|---------|----------|
+| `relatorio_video.json/txt` | Detalhes da análise visual (expressões, hematomas, marcas) |
+| `relatorio_audio.json/txt` | Transcrição, keywords, features vocais |
+| `relatorio_integrado.json/txt` | Fusão multimodal com score final e recomendações |
 
-## 📁 Estrutura do Projeto
+## Estrutura do Projeto
 
 ```
 Detec_facial/
-├── data/                           # Pasta com vídeos para análise
-│   └── YTDown.com_YouTube_Media_5t_FoFzVcsA_001_720p.mp4
-├── main_analysis.py                # Script principal (análise integrada)
-├── video_analysis.py               # Análise visual (expressões, hematomas)
-├── audio_analysis.py               # Análise de áudio/fala
-├── requirements.txt                # Dependências Python
-└── README.md                       # Este arquivo
+├── main_analysis.py      # Orquestrador: fusão multimodal
+├── video_analysis.py     # YOLOv8 + MediaPipe + detecção de anomalias
+├── audio_analysis.py     # Whisper + librosa + análise linguística
+├── requirements.txt      # Dependências Python
+├── pyproject.toml        # Metadados do projeto
+├── data/                 # Vídeos para análise (não versionados)
+├── tech-challenger.md    # Enunciado do Tech Challenge
+└── README.md             # Este arquivo
 ```
 
-## 💻 Como Usar
+## Execução Local vs. Nuvem
 
-### Análise Completa (Recomendado)
+**Tudo roda 100% local**, sem necessidade de serviços pagos:
 
-Execute o script principal que realiza análise integrada de vídeo e áudio:
+| Componente | Alternativa cloud | Solução local usada |
+|------------|-------------------|---------------------|
+| Speech-to-Text | Azure/Google Speech API | **Whisper** (OpenAI, gratuito) |
+| Detecção de objetos | Azure Computer Vision | **YOLOv8** (ultralytics, gratuito) |
+| Análise de sentimento | Azure Text Analytics | **Rule-based NLP** (custom) |
+| Face detection | Azure Face API | **MediaPipe** (Google, gratuito) |
 
-```bash
-python main_analysis.py
-```
+## Linhas de Apoio
 
-Este comando vai:
-1. Analisar expressões faciais frame a frame
-2. Detectar possíveis hematomas e marcas
-3. Extrair e transcrever o áudio
-4. Analisar a fala para indicadores de depressão
-5. Gerar relatórios consolidados
+- **CVV** (saúde mental): 188 (24h, gratuito)
+- **Central da Mulher** (violência): 180 (24h, gratuito)
+- **SAMU**: 192
+- **Disque Direitos Humanos**: 100
 
-### Análise Apenas de Vídeo
+## O que foi alterado em relação à versão original
 
-Se quiser analisar apenas aspectos visuais:
+### Problemas encontrados na versão anterior
 
-```bash
-python video_analysis.py
-```
+- Arquivo `simple_video_analysis.py` (476 linhas) era ~90% cópia do `video_analysis.py`
+- 92 chamadas `print()` espalhadas nos 3 arquivos, sem controle de nível
+- Transcrição de áudio dependia do **Google Speech API** (necessita internet, instável)
+- Nenhum modelo de detecção de pessoa — ia direto para o rosto sem validar se havia alguém no frame
+- Vocabulário de keywords limitado a depressão genérica, sem termos de saúde da mulher
+- Sem análise de features vocais (pitch, energia, pausas)
+- Sem fusão multimodal ponderada entre vídeo e áudio
+- Sem sistema de classificação de risco por níveis
+- Dependências desnecessárias (`matplotlib`, `imageio-ffmpeg`, `SpeechRecognition`)
+- Indentação inconsistente em `video_analysis.py` (erros de compilação)
+- Relatórios gerados com nomes genéricos (`analysis_report.json`)
 
-### Análise Apenas de Áudio
+### O que foi adicionado/corrigido
 
-Se quiser analisar apenas a fala:
-
-```bash
-python audio_analysis.py
-```
-
-## 📊 Relatórios Gerados
-
-Após a execução, serão criados os seguintes arquivos:
-
-### Relatórios Principais:
-- **RELATORIO_FINAL_INTEGRADO.json** - Relatório completo em JSON
-- **RELATORIO_FINAL_INTEGRADO.txt** - Relatório completo legível
-
-### Relatórios Detalhados:
-- **analysis_report.json** / **analysis_report.txt** - Detalhes da análise visual
-- **audio_analysis_report.json** / **audio_analysis_report.txt** - Detalhes da análise de áudio
-
-## 🔍 O Que o Sistema Analisa
-
-### 1. Análise de Depressão
-
-**Indicadores Visuais:**
-- Abertura dos olhos (cansaço, falta de energia)
-- Expressão da boca (falta de sorriso, tristeza)
-- Posição das sobrancelhas
-- Expressões faciais em geral
-
-**Indicadores na Fala:**
-- Palavras-chave relacionadas à depressão (tristeza, solidão, desespero, etc.)
-- Padrões linguísticos negativos
-- Tom de voz (pitch baixo)
-- Energia vocal
-- Uso excessivo de primeira pessoa (ruminação)
-
-### 2. Detecção de Hematomas (Violência Doméstica)
-
-- Identifica áreas com coloração:
-  - Roxa/azulada (hematomas frescos)
-  - Amarelada/esverdeada (hematomas antigos)
-  - Escura (hematomas recentes)
-- Mapeia localização dos hematomas no rosto
-- Calcula score de risco
-
-### 3. Detecção de Marcas e Machucados
-
-- Identifica marcas vermelhas
-- Detecta possíveis ferimentos
-- Identifica irritações cutâneas
-- Sugere avaliação médica quando necessário
-
-## 📈 Interpretação dos Scores
-
-### Score de Depressão:
-- **< 3**: Baixo risco
-- **3-8**: Risco moderado - Atenção recomendada
-- **8-15**: Alto risco - Avaliação profissional recomendada
-- **> 15**: Muito alto risco - Ação imediata necessária
-
-### Score de Hematomas:
-- **< 5**: Baixo risco
-- **5-15**: Risco moderado - Investigação recomendada
-- **> 15**: Alto risco - Avaliação urgente recomendada
-
-## ⚙️ Configurações Avançadas
-
-### Ajustar Taxa de Amostragem
-
-No código, você pode ajustar `sample_rate` em `video_analysis.py`:
-
-```python
-results = analyzer.analyze_video(sample_rate=30)  # Processa 1 frame a cada 30
-```
-
-- **sample_rate=10**: Análise mais detalhada (mais lenta)
-- **sample_rate=30**: Análise equilibrada (padrão)
-- **sample_rate=60**: Análise mais rápida (menos detalhada)
-
-### Processar Outros Vídeos
-
-Modifique o caminho do vídeo nos scripts:
-
-```python
-video_path = 'data/seu_video.mp4'
-```
-
-## 🛠️ Solução de Problemas
-
-### Erro: FFmpeg não encontrado
-```
-AVISO: ffmpeg não encontrado
-```
-**Solução**: Instale o FFmpeg seguindo as instruções acima.
-
-### Erro: SpeechRecognition não instalado
-```
-AVISO: SpeechRecognition não instalado
-```
-**Solução**: 
-```bash
-pip install SpeechRecognition
-```
-
-### Erro: librosa não instalado
-```
-AVISO: librosa não instalado
-```
-**Solução**: 
-```bash
-pip install librosa
-```
-
-### Análise de áudio não funciona
-- Verifique se o FFmpeg está instalado corretamente
-- Teste: `ffmpeg -version`
-- Certifique-se de que o vídeo tem áudio
-
-### Vídeo não é processado
-- Verifique se o arquivo de vídeo existe na pasta `data/`
-- Verifique o formato (MP4, AVI, MOV são suportados)
-- Verifique se o caminho está correto
-
-## 📚 Tecnologias Utilizadas
-
-- **OpenCV**: Processamento de vídeo e imagem
-- **MediaPipe**: Detecção facial e landmarks
-- **SpeechRecognition**: Transcrição de áudio
-- **Librosa**: Análise de características vocais
-- **NumPy**: Operações numéricas
-- **FFmpeg**: Extração e processamento de áudio
-
-## 🔐 Privacidade e Ética
-
-- Todos os dados são processados **localmente** na sua máquina
-- Nenhuma informação é enviada para servidores externos (exceto transcrição de áudio via Google Speech API)
-- Use esta ferramenta de forma ética e responsável
-- Respeite a privacidade das pessoas nos vídeos
-- Obtenha consentimento antes de analisar vídeos de terceiros
-
-## 🤝 Suporte e Recursos
-
-### Linhas de Apoio (Brasil):
-
-**Saúde Mental:**
-- CVV - Centro de Valorização da Vida: **188** (24h)
-- CAPS - Centro de Atenção Psicossocial (busque o mais próximo)
-- SAMU: **192**
-
-**Violência Doméstica:**
-- Central de Atendimento à Mulher: **180** (24h)
-- Polícia Militar: **190**
-- Delegacia da Mulher (busque a mais próxima)
-- Disque Direitos Humanos: **100**
-
-**Saúde Geral:**
-- SAMU: **192**
-- UBS - Unidade Básica de Saúde (busque a mais próxima)
-
-## 📝 Limitações
-
-- A detecção é baseada em padrões visuais e auditivos, não é 100% precisa
-- Fatores como iluminação, qualidade do vídeo e ângulo da câmera afetam os resultados
-- Não substitui avaliação profissional médica ou psicológica
-- Deve ser usada como ferramenta de **triagem e apoio**, não diagnóstico
-
-## 📄 Licença
-
-Este projeto é para fins educacionais e de pesquisa.
-
-## ⚠️ Disclaimer
-
-Esta ferramenta NÃO substitui profissionais de saúde, psicólogos, assistentes sociais ou autoridades competentes. Em situações de risco, procure ajuda profissional imediatamente.
-
----
-
-**Desenvolvido como ferramenta de apoio para detecção precoce de situações de risco.**
+| Mudança | Antes | Depois |
+|---------|-------|--------|
+| Detecção de pessoa | Nenhuma | **YOLOv8n** como pré-filtro em cada frame |
+| Transcrição de voz | Google Speech API (nuvem) | **Whisper base** (local, offline, gratuito) |
+| Análise vocal | Não existia | **librosa** — pitch, energia, ZCR, detecção de pausas |
+| Saída no terminal | 92 `print()` | 0 prints, **24 chamadas `logging`** com nível e timestamp |
+| Arquivo duplicado | `simple_video_analysis.py` (476 linhas) | Deletado — fallback Haar integrado no `video_analysis.py` |
+| Fusão dos resultados | Soma direta de scores | Score ponderado: **visual × 0.4 + áudio × 0.6** |
+| Classificação de risco | Não existia | 4 níveis: BAIXO / MODERADO / ALTO / MUITO ALTO |
+| Vocabulário | ~50 termos genéricos | +20 termos: pós-parto, violência doméstica, ansiedade gestacional, fadiga hormonal |
+| Hesitações | Não detectava | Detecta: "né", "tipo", "assim", "ahn" |
+| Detecção de hematomas | Ranges HSV genéricos (muitos falsos positivos) | Ranges **calibrados** + filtros morfológicos + área mínima |
+| Relatórios | `analysis_report.json` | `relatorio_video`, `relatorio_audio`, `relatorio_integrado` (JSON + TXT) |
+| Recursos de apoio | Não incluía | CVV 188, Central da Mulher 180, SAMU 192 |
+| Total de linhas | 1.749 (4 arquivos) | **759** (3 arquivos) — redução de 57% |

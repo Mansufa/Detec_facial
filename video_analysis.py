@@ -1,579 +1,296 @@
+import json
+import logging
+from collections import defaultdict
+from datetime import datetime
+
 import cv2
 import numpy as np
-from datetime import datetime
-import json
-import os
-from collections import defaultdict
-import matplotlib.pyplot as plt
+from ultralytics import YOLO
 
-try:
-    import mediapipe as mp
-    from mediapipe.tasks import python
-    from mediapipe.tasks.python import vision
-    MEDIAPIPE_AVAILABLE = True
-except ImportError:
-    MEDIAPIPE_AVAILABLE = False
-    print("AVISO: MediaPipe não disponível. Usando detecção facial alternativa.")
+log = logging.getLogger(__name__)
+
+YOLO_MODEL = "yolov8n.pt"
+PERSON_CLASS_ID = 0
+
+HSV_BRUISE_RANGES = [
+    ("hematoma_roxo", np.array([120, 50, 50]), np.array([155, 255, 180])),
+    ("hematoma_amarelo", np.array([22, 60, 60]), np.array([38, 200, 180])),
+]
+
+HSV_RED_RANGES = [
+    (np.array([0, 130, 100]), np.array([6, 255, 200])),
+    (np.array([174, 130, 100]), np.array([180, 255, 200])),
+]
+
+MORPH_KERNEL = np.ones((5, 5), np.uint8)
+
+
+def _face_location_label(rel_x: float, rel_y: float) -> str:
+    h_label = "esquerda" if rel_x < 0.35 else ("direita" if rel_x > 0.65 else "centro")
+    v_label = "testa/superior" if rel_y < 0.33 else ("meio" if rel_y < 0.66 else "inferior/queixo")
+    return f"{h_label} - {v_label}"
 
 
 class VideoAnalyzer:
-    """Análise de vídeos para detectar sinais de depressão, hematomas e problemas de saúde"""
-
-    def __init__(self, video_path):
+    def __init__(self, video_path: str):
         self.video_path = video_path
         self.cap = cv2.VideoCapture(video_path)
+        if not self.cap.isOpened():
+            raise FileNotFoundError(f"Não foi possível abrir: {video_path}")
 
-        # Configuração do detector facial
+        self.yolo = YOLO(YOLO_MODEL)
+        log.info("YOLOv8 carregado (%s)", YOLO_MODEL)
+
+        self.use_mediapipe = False
         try:
-            # Tenta usar MediaPipe
             import mediapipe as mp
-            self.mp_face_mesh = mp.solutions.face_mesh
-            self.face_mesh = self.mp_face_mesh.FaceMesh(
+
+            self.face_mesh = mp.solutions.face_mesh.FaceMesh(
                 max_num_faces=1,
                 refine_landmarks=True,
                 min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
+                min_tracking_confidence=0.5,
             )
             self.use_mediapipe = True
-        except:
-            # Fallback para Haar Cascade do OpenCV
-            print("Usando detector facial alternativo (Haar Cascade)")
-            cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-            self.face_cascade = cv2.CascadeClassifier(cascade_path)
-            eye_cascade_path = cv2.data.haarcascades + 'haarcascade_eye.xml'
-            self.eye_cascade = cv2.CascadeClassifier(eye_cascade_path)
-            self.use_mediapipe = False
-              'expressoes_detectadas': [],
-               'score_depressao': 0,
-                'indicadores': []
-            },
-            'hematomas': {
-              'detectados': [],
-               'localizacoes': [],
-                'score_risco': 0
-            },
-                'marcas': {
-              'detectadas': [],
-               'tipos': []
-            },
-                'frames_analisados': 0,
-                'timestamp': datetime.now().isoformat()
-                }
+            log.info("MediaPipe FaceMesh disponível")
+        except Exception:
+            cascade = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            eye_cascade = cv2.data.haarcascades + "haarcascade_eye.xml"
+            self.face_cascade = cv2.CascadeClassifier(cascade)
+            self.eye_cascade = cv2.CascadeClassifier(eye_cascade)
+            log.warning("MediaPipe indisponível — fallback Haar Cascade")
 
-                def analyze_facial_expression(self, landmarks, frame_shape):
-                """Analisa expressões faciais para detectar sinais de depressão"""
-                h, w = frame_shape[:2]
+        self.results = {
+            "depressao": {"expressoes": [], "score": 0, "indicadores": []},
+            "hematomas": {"detectados": [], "localizacoes": {}, "score_risco": 0},
+            "marcas": {"detectadas": [], "tipos": {}},
+            "frames_analisados": 0,
+            "timestamp": datetime.now().isoformat(),
+        }
 
-                # Pontos chave para análise de expressão
-                # Olhos (para detectar cansaço/tristeza)
-                left_eye_top = landmarks[159]
-                left_eye_bottom = landmarks[145]
-                right_eye_top = landmarks[386]
-                right_eye_bottom = landmarks[374]
+    def _expr_landmarks(self, landmarks, shape):
+        h, w = shape[:2]
+        eye_l = abs(landmarks[159].y - landmarks[145].y) * h
+        eye_r = abs(landmarks[386].y - landmarks[374].y) * h
+        avg_eye = (eye_l + eye_r) / 2
 
-                # Sobrancelhas (para detectar expressão triste)
-                left_eyebrow = landmarks[70]
-                right_eyebrow = landmarks[300]
+        mouth_w = abs(landmarks[61].x - landmarks[291].x) * w
+        mouth_h = abs(landmarks[13].y - landmarks[14].y) * h
+        mouth_ratio = mouth_h / mouth_w if mouth_w > 0 else 0
 
-                # Boca (para detectar falta de sorriso/tristeza)
-                mouth_left = landmarks[61]
-                mouth_right = landmarks[291]
-                mouth_top = landmarks[13]
-                mouth_bottom = landmarks[14]
+        indicators, score = [], 0
+        if avg_eye < 8:
+            indicators.append("Olhos semicerrados (cansaço/tristeza)")
+            score += 2
+        if mouth_ratio < 0.08:
+            indicators.append("Expressão neutra/triste (sem sorriso)")
+            score += 2
 
-                # Cálculo de métricas
-                eye_openness_left = abs(left_eye_top.y - left_eye_bottom.y) * h
-                eye_openness_right = abs(
-                    right_eye_top.y - right_eye_bottom.y) * h
-                avg_eye_openness = (eye_openness_left + eye_openness_right) / 2
+        return {"eye_openness": avg_eye, "mouth_ratio": mouth_ratio}, indicators, score
 
-                mouth_width = abs(mouth_left.x - mouth_right.x) * w
-                mouth_height = abs(mouth_top.y - mouth_bottom.y) * h
-                mouth_ratio = mouth_height / mouth_width if mouth_width > 0 else 0
+    def _expr_haar(self, gray_face, frame, x, y, w, h):
+        eyes = self.eye_cascade.detectMultiScale(gray_face)
+        indicators, score = [], 0
 
-                # Análise de expressão
-                expression_data = {
-                    'eye_openness': avg_eye_openness,
-                    'mouth_ratio': mouth_ratio,
-                    'timestamp': self.results['frames_analisados']
-                    }
+        if len(eyes) < 2:
+            indicators.append("Olhos semicerrados (cansaço/tristeza)")
+            score += 2
 
-                # Indicadores de depressão
-                indicators = []
-                depression_score = 0
+        lower = frame[y + int(h * 0.6) : y + h, x : x + w]
+        if lower.size > 0 and np.mean(cv2.cvtColor(lower, cv2.COLOR_BGR2GRAY)) < 100:
+            indicators.append("Expressão neutra/triste (sem sorriso)")
+            score += 1
 
-                # Olhos pouco abertos (cansaço, falta de energia)
-                if avg_eye_openness < 8:
-            indicators.append('Olhos com aparência cansada')
-            depression_score += 2
+        return {"eye_openness": float(len(eyes)), "mouth_ratio": 0.0}, indicators, score
 
-                # Boca neutra ou para baixo (falta de sorriso)
-                if mouth_ratio < 0.08:
-            indicators.append('Expressão facial neutra/triste')
-            depression_score += 2
-
-                return expression_data, indicators, depression_score
-
-                def detect_bruises_and_marks(self, frame, face_region):
-                """Detecta hematomas, marcas e possíveis sinais de violência ou problemas de saúde"""
-                x, y, w, h = face_region
-
-                # Extrai região da face com margem para pescoço e orelhas
-                margin = int(h * 0.3)
-                y1 = max(0, y - margin)
-                y2 = min(frame.shape[0], y + h + margin)
-                x1 = max(0, x - margin)
-                x2 = min(frame.shape[1], x + w + margin)
-
-                face_area = frame[y1:y2, x1:x2]
-
-                if face_area.size == 0:
+    def _detect_skin_anomalies(self, frame, region):
+        x, y, w, h = region
+        margin = int(h * 0.3)
+        y1, y2 = max(0, y - margin), min(frame.shape[0], y + h + margin)
+        x1, x2 = max(0, x - margin), min(frame.shape[1], x + w + margin)
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
             return [], []
 
-                # Conversão para diferentes espaços de cor
-                hsv = cv2.cvtColor(face_area, cv2.COLOR_BGR2HSV)
-                lab = cv2.cvtColor(face_area, cv2.COLOR_BGR2LAB)
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        bruises, marks = [], []
 
-                bruises = []
-                marks = []
+        combined = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        for _, lo, hi in HSV_BRUISE_RANGES:
+            combined = cv2.bitwise_or(combined, cv2.inRange(hsv, lo, hi))
+        combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, MORPH_KERNEL)
+        combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, MORPH_KERNEL)
 
-                # Detecção de hematomas (tons roxos, azuis escuros, amarelados)
-                # Hematomas frescos (roxo/azulado)
-                lower_purple = np.array([120, 30, 30])
-                upper_purple = np.array([160, 255, 200])
-                mask_purple = cv2.inRange(hsv, lower_purple, upper_purple)
+        for cnt in cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+            area = cv2.contourArea(cnt)
+            if 300 < area < 5000:
+                xc, yc, wc, hc = cv2.boundingRect(cnt)
+                loc = _face_location_label((xc + wc / 2) / roi.shape[1], (yc + hc / 2) / roi.shape[0])
+                bruises.append({"area": area, "location": loc, "type": "hematoma"})
 
-                # Hematomas mais antigos (amarelado/esverdeado)
-                lower_yellow = np.array([20, 40, 40])
-                upper_yellow = np.array([40, 255, 200])
-                mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        red_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        for lo, hi in HSV_RED_RANGES:
+            red_mask = cv2.bitwise_or(red_mask, cv2.inRange(hsv, lo, hi))
+        red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, MORPH_KERNEL)
 
-                # Hematomas escuros
-                lower_dark = np.array([0, 0, 0])
-                upper_dark = np.array([180, 255, 80])
-                mask_dark = cv2.inRange(hsv, lower_dark, upper_dark)
+        for cnt in cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+            area = cv2.contourArea(cnt)
+            if 500 < area < 3000:
+                xc, yc, wc, hc = cv2.boundingRect(cnt)
+                loc = _face_location_label((xc + wc / 2) / roi.shape[1], (yc + hc / 2) / roi.shape[0])
+                marks.append({"area": area, "location": loc, "type": "marca_vermelha"})
 
-                # Combina máscaras
-                mask_bruise = cv2.bitwise_or(mask_purple, mask_yellow)
-                mask_bruise = cv2.bitwise_or(mask_bruise, mask_dark)
+        return bruises, marks
 
-                # Remove ruído
-                kernel = np.ones((5, 5), np.uint8)
-                mask_bruise = cv2.morphologyEx(
-                    mask_bruise, cv2.MORPH_OPEN, kernel)
-                mask_bruise = cv2.morphologyEx(
-                    mask_bruise, cv2.MORPH_CLOSE, kernel)
+    def analyze(self, sample_rate: int = 30) -> dict:
+        fps = self.cap.get(cv2.CAP_PROP_FPS)
+        total = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        log.info("Vídeo: %d frames, %.1f FPS", total, fps)
 
-                # Detecta contornos
-                contours, _ = cv2.findContours(
-            mask_bruise, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        frame_idx, processed = 0, 0
 
-                for contour in contours:
-            area = cv2.contourArea(contour)
-            # Filtra áreas muito pequenas (ruído) ou muito grandes (sombras)
-            if 100 < area < 5000:
-                x_c, y_c, w_c, h_c = cv2.boundingRect(contour)
-
-                # Calcula localização relativa
-                relative_x = (x_c + w_c/2) / face_area.shape[1]
-                relative_y = (y_c + h_c/2) / face_area.shape[0]
-
-                location = self._determine_face_location(
-                    relative_x, relative_y)
-
-                bruises.append({
-                  'area': area,
-                   'location': location,
-                    'coords': (x_c, y_c, w_c, h_c),
-                    'type': 'hematoma_possivel'
-                })
-
-                    # Detecção de marcas vermelhas (possíveis ferimentos, irritações)
-                    lower_red1= np.array([0, 50, 50])
-                    upper_red1= np.array([10, 255, 255])
-                    lower_red2= np.array([170, 50, 50])
-                    upper_red2= np.array([180, 255, 255])
-
-                    mask_red1= cv2.inRange(hsv, lower_red1, upper_red1)
-                    mask_red2= cv2.inRange(hsv, lower_red2, upper_red2)
-                    mask_red= cv2.bitwise_or(mask_red1, mask_red2)
-
-                    mask_red= cv2.morphologyEx(mask_red, cv2.MORPH_OPEN, kernel)
-                    contours_red, _= cv2.findContours(
-                    mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-                    for contour in contours_red:
-            area= cv2.contourArea(contour)
-                    if 80 < area < 3000:
-                x_c, y_c, w_c, h_c = cv2.boundingRect(contour)
-
-                relative_x = (x_c + w_c/2) / face_area.shape[1]
-                relative_y = (y_c + h_c/2) / face_area.shape[0]
-
-                location = self._determine_face_location(
-                    relative_x, relative_y)
-
-                marks.append({
-                  'area': area,
-                   'location': location,
-                    'coords': (x_c, y_c, w_c, h_c),
-                    'type': 'marca_vermelha'
-                })
-
-                    return bruises, marks
-
-                    def _determine_face_location(self, rel_x, rel_y):
-                    """Determina a localização na face com base em coordenadas relativas"""
-                    location = []
-
-                    # Horizontal
-                    if rel_x < 0.35:
-                    location.append('esquerda')
-                    elif rel_x > 0.65:
-                    location.append('direita')
-                    else:
-                    location.append('centro')
-
-                    # Vertical
-                    if rel_y < 0.33:
-                    location.append('testa/superior')
-                    elif rel_y < 0.66:
-                    location.append('meio')
-                    else:
-                    location.append('inferior/queixo')
-
-                    return ' - '.join(location)
-
-                    def analyze_video(self, sample_rate=30):
-                    """Analisa o vídeo completo"""
-                    frame_count = 0
-                    processed_count = 0
-
-                    fps = self.cap.get(cv2.CAP_PROP_FPS)
-                    total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-                    print(f"Iniciando análise do vídeo...")
-                print(f"Total de frames: {total_frames}, FPS: {fps}")
-
-                    while self.cap.isOpened():
-            ret, frame = self.cap.read()
-            if not ret:
+        while self.cap.isOpened():
+            ok, frame = self.cap.read()
+            if not ok:
                 break
-
-            frame_count += 1
-
-            # Processa apenas alguns frames para otimizar
-            if frame_count % sample_rate != 0:
+            frame_idx += 1
+            if frame_idx % sample_rate != 0:
                 continue
 
-            processed_count += 1
-            self.results['frames_analisados'] = processed_count
+            processed += 1
+            self.results["frames_analisados"] = processed
 
-            # Converte para RGB para o MediaPipe
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            dets = self.yolo(frame, verbose=False)[0]
+            persons = [b for b in dets.boxes if int(b.cls[0]) == PERSON_CLASS_ID and float(b.conf[0]) > 0.5]
+            if not persons:
+                continue
 
-            # Detecta face
-            results_face = self.face_mesh.process(rgb_frame)
+            if self.use_mediapipe:
+                self._run_mediapipe(frame)
+            else:
+                self._run_haar(frame)
 
-            if results_face.multi_face_landmarks:
-                for face_landmarks in results_face.multi_face_landmarks:
-                    # Análise de expressão facial
-                    expression_data, indicators, depression_score = self.analyze_facial_expression(
-                        face_landmarks.landmark, frame.shape
-                    )
+            if processed % 10 == 0:
+                log.info("Frames processados: %d", processed)
 
-                    self.results['depressao']['expressoes_detectadas'].append(
-                        expression_data)
-                    self.results['depressao']['score_depressao'] += depression_score
-                    if indicators:
-                        self.results['depressao']['indicadores'].extend(
-                            indicators)
+        self.cap.release()
+        self._finalize()
+        return self.results
 
-                    # Calcula bounding box da face
-                    h, w = frame.shape[:2]
-                    x_coords = [landmark.x *
-                               w for landmark in face_landmarks.landmark]
-                    y_coords = [landmark.y *
-                               h for landmark in face_landmarks.landmark]
-
-                    x_min, x_max = int(min(x_coords)), int(max(x_coords))
-                    y_min, y_max = int(min(y_coords)), int(max(y_coords))
-
-                    face_region = (x_min, y_min, x_max - x_min, y_max - y_min)
-
-                    # Detecção de hematomas e marcas
-                    bruises, marks = self.detect_bruises_and_marks(
-                        frame, face_region)
-
-                    if bruises:
-                        self.results['hematomas']['detectados'].extend(bruises)
-                        self.results['hematomas']['score_risco'] += len(
-                            bruises) * 3
-
-                    if marks:
-                        self.results['marcas']['detectadas'].extend(marks)
-
-            if processed_count % 10 == 0:
-                print(f"Processados {processed_count} frames...")
-
-                    self.cap.release()
-
-                    # Processa resultados finais
-                    self._process_final_results()
-
-                    return self.results
-
-                    def _process_final_results(self):
-                    """Processa e sumariza os resultados finais"""
-                    # Média do score de depressão
-                    if self.results['frames_analisados'] > 0:
-            self.results['depressao']['score_depressao'] /= self.results['frames_analisados']
-
-                    # Remove indicadores duplicados
-        self.results['depressao']['indicadores'] = list(set(
-            self.results['depressao']['indicadores']
-        ))
-
-            # Agrupa hematomas por localização
-        location_count = defaultdict(int)
-            for bruise in self.results['hematomas']['detectados']:
-            location_count[bruise['location']] += 1
-
-        self.results['hematomas']['localizacoes'] = dict(location_count)
-
-            # Agrupa marcas por tipo
-            mark_types= defaultdict(int)
-            for mark in self.results['marcas']['detectadas']:
-            mark_types[mark['type']] += 1
-
-        self.results['marcas']['tipos'] = dict(mark_types)
-
-            def generate_report(self, output_path='analysis_report.json'):
-            """Gera relatório completo da análise"""
-            # Interpretação dos resultados
-        report = {
-            'arquivo_analisado': self.video_path,
-            'timestamp_analise': self.results['timestamp'],
-            'frames_analisados': self.results['frames_analisados'],
-
-            'analise_depressao': {
-              'score': round(self.results['depressao']['score_depressao'], 2),
-               'nivel': self._interpret_depression_score(
-                    self.results['depressao']['score_depressao']
-                ),
-                'indicadores_encontrados': self.results['depressao']['indicadores'],
-                'recomendacao': self._get_depression_recommendation(
-                    self.results['depressao']['score_depressao']
-                )
-            },
-
-                'analise_hematomas': {
-              'total_detectado': len(self.results['hematomas']['detectados']),
-               'score_risco': self.results['hematomas']['score_risco'],
-                'nivel_risco': self._interpret_bruise_risk(
-                    self.results['hematomas']['score_risco']
-                ),
-                'localizacoes': self.results['hematomas']['localizacoes'],
-                'recomendacao': self._get_bruise_recommendation(
-                    self.results['hematomas']['score_risco'],
-                    self.results['hematomas']['localizacoes']
-                )
-            },
-
-                'analise_marcas': {
-              'total_detectado': len(self.results['marcas']['detectadas']),
-               'tipos': self.results['marcas']['tipos'],
-                'recomendacao': self._get_marks_recommendation(
-                    len(self.results['marcas']['detectadas'])
-                )
-            }
-            }
-
-                # Salva relatório
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(report, f, indent=4, ensure_ascii=False)
-
-                # Gera relatório em texto
-                self._generate_text_report(
-                report, output_path.replace('.json', '.txt'))
-
-                return report
-
-                def _interpret_depression_score(self, score):
-            """Interpreta o score de depressão"""
-            if score < 0.5:
-                return 'Baixo - Sem sinais significativos'
-                elif score < 1.5:
-                return 'Moderado - Alguns indicadores presentes'
-                else:
-                return 'Alto - Múltiplos indicadores presentes'
-
-                def _get_depression_recommendation(self, score):
-            """Retorna recomendação baseada no score de depressão"""
-            if score < 0.5:
-                return 'Não foram detectados sinais significativos de depressão nas expressões faciais.'
-                elif score < 1.5:
-                return 'Alguns indicadores de expressão facial podem sugerir cansaço ou tristeza. Recomenda-se observação e diálogo aberto.'
-                else:
-                return 'ATENÇÃO: Múltiplos indicadores detectados. Recomenda-se fortemente buscar avaliação profissional de saúde mental.'
-
-                def _interpret_bruise_risk(self, score):
-            """Interpreta o score de risco de hematomas"""
-            if score < 5:
-                return 'Baixo - Poucos ou nenhum hematoma detectado'
-                elif score < 15:
-                return 'Moderado - Alguns hematomas detectados'
-                else:
-                return 'ALTO - Múltiplos hematomas detectados'
-
-                def _get_bruise_recommendation(self, score, locations):
-            """Retorna recomendação baseada nos hematomas"""
-            if score < 5:
-                return 'Não foram detectados hematomas significativos.'
-                elif score < 15:
-                rec = 'Foram detectados alguns hematomas. '
-                if locations:
-                rec += f'Localizações: {", ".join(locations.keys())}. '
-                rec += 'Recomenda-se investigar a origem dessas marcas.'
-                return rec
-                else:
-                return f'ALERTA: Múltiplos hematomas detectados em diversas regiões. Localizações: {", ".join(locations.keys())}. RECOMENDAÇÃO URGENTE: Avaliação médica e/ou avaliação de segurança pessoal. Em caso de violência doméstica, ligue 180 (Central de Atendimento à Mulher).'
-
-                def _get_marks_recommendation(self, count):
-            """Retorna recomendação baseada nas marcas"""
-            if count < 3:
-                return 'Poucas ou nenhuma marca detectada.'
-                elif count < 8:
-                return 'Algumas marcas vermelhas foram detectadas. Podem ser irritações cutâneas, arranhões ou outros problemas de pele. Recomenda-se observação.'
-                else:
-                return 'Múltiplas marcas detectadas. Recomenda-se avaliação dermatológica ou médica para investigar possíveis problemas de saúde da pele.'
-
-                def _generate_text_report(self, report, output_path):
-            """Gera relatório em formato texto legível"""
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write("="*80 + "\n")
-                f.write("RELATÓRIO DE ANÁLISE DE VÍDEO\n")
-                f.write(
-                "Detecção de Sinais de Depressão, Hematomas e Problemas de Saúde\n")
-                f.write("="*80 + "\n\n")
-
-                f.write(f"Arquivo Analisado: {report['arquivo_analisado']}\n")
-                f.write(f"Data da Análise: {report['timestamp_analise']}\n")
-                f.write(f"Frames Analisados: {report['frames_analisados']}\n\n")
-
-                f.write("-"*80 + "\n")
-                f.write("1. ANÁLISE DE SINAIS DE DEPRESSÃO (Expressões Faciais)\n")
-                f.write("-"*80 + "\n")
-                f.write(
-                f"Score de Depressão: {report['analise_depressao']['score']}\n")
-                f.write(f"Nível: {report['analise_depressao']['nivel']}\n\n")
-
-                if report['analise_depressao']['indicadores_encontrados']:
-                f.write("Indicadores Encontrados:\n")
-                for ind in report['analise_depressao']['indicadores_encontrados']:
-                    f.write(f"  • {ind}\n")
-                else:
-                f.write("Nenhum indicador significativo encontrado.\n")
-
-                f.write(
-                f"\nRecomendação: {report['analise_depressao']['recomendacao']}\n\n")
-
-                f.write("-"*80 + "\n")
-                f.write("2. ANÁLISE DE HEMATOMAS (Possível Violência Doméstica)\n")
-                f.write("-"*80 + "\n")
-                f.write(
-                f"Total de Hematomas Detectados: {report['analise_hematomas']['total_detectado']}\n")
-                f.write(
-                f"Score de Risco: {report['analise_hematomas']['score_risco']}\n")
-                f.write(
-                f"Nível de Risco: {report['analise_hematomas']['nivel_risco']}\n\n")
-
-                if report['analise_hematomas']['localizacoes']:
-                f.write("Localizações dos Hematomas:\n")
-                for loc, count in report['analise_hematomas']['localizacoes'].items():
-                    f.write(f"  • {loc}: {count} ocorrência(s)\n")
-                else:
-                f.write("Nenhum hematoma detectado.\n")
-
-                f.write(
-                f"\nRecomendação: {report['analise_hematomas']['recomendacao']}\n\n")
-
-                f.write("-"*80 + "\n")
-                f.write("3. ANÁLISE DE MARCAS E MACHUCADOS (Problemas de Saúde)\n")
-                f.write("-"*80 + "\n")
-                f.write(
-                f"Total de Marcas Detectadas: {report['analise_marcas']['total_detectado']}\n\n")
-
-                if report['analise_marcas']['tipos']:
-                f.write("Tipos de Marcas:\n")
-                for tipo, count in report['analise_marcas']['tipos'].items():
-                    f.write(f"  • {tipo}: {count} ocorrência(s)\n")
-                else:
-                f.write("Nenhuma marca significativa detectada.\n")
-
-                f.write(
-                f"\nRecomendação: {report['analise_marcas']['recomendacao']}\n\n")
-
-                f.write("="*80 + "\n")
-                f.write("IMPORTANTE:\n")
-                f.write(
-                "Esta análise é baseada em processamento de imagem por computador e deve ser\n")
-                f.write(
-                "considerada como uma ferramenta de triagem, não um diagnóstico definitivo.\n")
-                f.write("Recomenda-se sempre consulta com profissionais qualificados.\n")
-                f.write("="*80 + "\n")
-
-
-                def main():
-            """Função principal para executar a análise"""
-            video_path = 'data/YTDown.com_YouTube_Media_5t_FoFzVcsA_001_720p.mp4'
-
-            if not os.path.exists(video_path):
-        print(f"ERRO: Vídeo não encontrado em {video_path}")
+    def _run_mediapipe(self, frame):
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        result = self.face_mesh.process(rgb)
+        if not result.multi_face_landmarks:
             return
+        for fl in result.multi_face_landmarks:
+            expr, inds, score = self._expr_landmarks(fl.landmark, frame.shape)
+            self._save_expr(expr, inds, score)
+            h, w = frame.shape[:2]
+            xs = [lm.x * w for lm in fl.landmark]
+            ys = [lm.y * h for lm in fl.landmark]
+            region = (int(min(xs)), int(min(ys)), int(max(xs) - min(xs)), int(max(ys) - min(ys)))
+            self._save_anomalies(frame, region)
 
-            print("="*80)
-                print("SISTEMA DE ANÁLISE DE VÍDEO")
-                print("Detecção de Sinais de Depressão, Hematomas e Problemas de Saúde")
-                print("="*80)
-                print()
+    def _run_haar(self, frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self.face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
+        for x, y, w, h in faces:
+            expr, inds, score = self._expr_haar(gray[y : y + h, x : x + w], frame, x, y, w, h)
+            self._save_expr(expr, inds, score)
+            self._save_anomalies(frame, (x, y, w, h))
 
-                # Cria analisador
-                analyzer = VideoAnalyzer(video_path)
+    def _save_expr(self, data, indicators, score):
+        data["frame"] = self.results["frames_analisados"]
+        self.results["depressao"]["expressoes"].append(data)
+        self.results["depressao"]["score"] += score
+        self.results["depressao"]["indicadores"].extend(indicators)
 
-                # Executa análise
-                print("Iniciando análise do vídeo...")
-                results = analyzer.analyze_video(sample_rate=30)
+    def _save_anomalies(self, frame, region):
+        bruises, marks = self._detect_skin_anomalies(frame, region)
+        if bruises:
+            self.results["hematomas"]["detectados"].extend(bruises)
+            self.results["hematomas"]["score_risco"] += len(bruises) * 3
+        if marks:
+            self.results["marcas"]["detectadas"].extend(marks)
 
-                print("\nAnálise concluída!")
-                print(f"Total de frames analisados: {results['frames_analisados']}")
+    def _finalize(self):
+        n = self.results["frames_analisados"]
+        if n > 0:
+            self.results["depressao"]["score"] /= n
+        self.results["depressao"]["indicadores"] = list(set(self.results["depressao"]["indicadores"]))
 
-                # Gera relatório
-                print("\nGerando relatórios...")
-                report = analyzer.generate_report('analysis_report.json')
+        loc = defaultdict(int)
+        for b in self.results["hematomas"]["detectados"]:
+            loc[b["location"]] += 1
+        self.results["hematomas"]["localizacoes"] = dict(loc)
 
-                print("\n" + "="*80)
-                print("RESUMO DOS RESULTADOS")
-                print("="*80)
+        tc = defaultdict(int)
+        for m in self.results["marcas"]["detectadas"]:
+            tc[m["type"]] += 1
+        self.results["marcas"]["tipos"] = dict(tc)
 
-                print(f"\n1. DEPRESSÃO:")
-                print(f"   Score: {report['analise_depressao']['score']}")
-                print(f"   Nível: {report['analise_depressao']['nivel']}")
+    def generate_report(self, output_path: str = "relatorio_video.json") -> dict:
+        r = self.results
+        report = {
+            "arquivo": self.video_path,
+            "timestamp": r["timestamp"],
+            "frames_analisados": r["frames_analisados"],
+            "depressao": {
+                "score": round(r["depressao"]["score"], 2),
+                "nivel": self._nivel_depressao(r["depressao"]["score"]),
+                "indicadores": r["depressao"]["indicadores"],
+            },
+            "hematomas": {
+                "total": len(r["hematomas"]["detectados"]),
+                "score_risco": r["hematomas"]["score_risco"],
+                "nivel_risco": self._nivel_hematoma(r["hematomas"]["score_risco"]),
+                "localizacoes": r["hematomas"]["localizacoes"],
+            },
+            "marcas": {
+                "total": len(r["marcas"]["detectadas"]),
+                "tipos": r["marcas"]["tipos"],
+            },
+        }
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
 
-                print(f"\n2. HEMATOMAS:")
-                print(
-        f"   Total Detectado: {report['analise_hematomas']['total_detectado']}")
-                print(f"   Nível de Risco: {report['analise_hematomas']['nivel_risco']}")
+        self._write_txt(report, output_path.replace(".json", ".txt"))
+        log.info("Relatórios: %s", output_path)
+        return report
 
-                print(f"\n3. MARCAS:")
-                print(f"   Total Detectado: {report['analise_marcas']['total_detectado']}")
+    @staticmethod
+    def _nivel_depressao(score):
+        if score < 0.5:
+            return "Baixo"
+        return "Moderado" if score < 1.5 else "Alto"
 
-                print("\n" + "="*80)
-                print("Relatórios salvos:")
-                print("  • analysis_report.json (formato JSON)")
-                print("  • analysis_report.txt (formato texto)")
-                print("="*80)
+    @staticmethod
+    def _nivel_hematoma(score):
+        if score < 5:
+            return "Baixo"
+        return "Moderado" if score < 15 else "Alto"
 
+    @staticmethod
+    def _write_txt(report, path):
+        sep = "=" * 72
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"{sep}\nRELATÓRIO DE ANÁLISE DE VÍDEO\n{sep}\n\n")
+            f.write(f"Arquivo: {report['arquivo']}\nData: {report['timestamp']}\n")
+            f.write(f"Frames: {report['frames_analisados']}\n\n")
 
-                if __name__ == "__main__":
-                main()
+            d = report["depressao"]
+            f.write(f"--- DEPRESSÃO ---\nScore: {d['score']}  Nível: {d['nivel']}\n")
+            for i in d["indicadores"]:
+                f.write(f"  • {i}\n")
+
+            h = report["hematomas"]
+            f.write(f"\n--- HEMATOMAS ---\nTotal: {h['total']}  Risco: {h['nivel_risco']}\n")
+            for loc, n in h["localizacoes"].items():
+                f.write(f"  • {loc}: {n}x\n")
+
+            m = report["marcas"]
+            f.write(f"\n--- MARCAS ---\nTotal: {m['total']}\n")
+            for t, n in m["tipos"].items():
+                f.write(f"  • {t}: {n}x\n")
+
+            f.write(f"\n{sep}\nTriagem automatizada — não substitui avaliação profissional.\n{sep}\n")

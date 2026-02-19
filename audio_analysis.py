@@ -1,366 +1,309 @@
-import os
-import subprocess
 import json
-from pathlib import Path
+import logging
+import os
 import re
+import subprocess
+
+import numpy as np
+
+log = logging.getLogger(__name__)
+
+DEPRESSION_KEYWORDS = [
+    "triste",
+    "tristeza",
+    "deprimido",
+    "deprimida",
+    "deprimente",
+    "sozinho",
+    "sozinha",
+    "solidão",
+    "vazio",
+    "vazia",
+    "desesperado",
+    "desesperada",
+    "sem esperança",
+    "desespero",
+    "cansado",
+    "cansada",
+    "exausto",
+    "exausta",
+    "esgotado",
+    "esgotada",
+    "não consigo",
+    "não aguento",
+    "não dá mais",
+    "sem sentido",
+    "sem propósito",
+    "inútil",
+    "fracasso",
+    "culpa",
+    "culpado",
+    "culpada",
+    "ninguém entende",
+    "ninguém se importa",
+    "me afastar",
+    "isolar",
+    "isolamento",
+    "não durmo",
+    "insônia",
+    "sem apetite",
+    "sem energia",
+    "desistir",
+    "acabar com tudo",
+    "sumir",
+    "angústia",
+    "ansiedade",
+    "medo",
+    "pavor",
+    "choro",
+    "chorar",
+    "não consigo cuidar",
+    "não sinto amor",
+    "mãe ruim",
+    "não quero o bebê",
+    "não consigo amamentar",
+    "pós-parto",
+    "puerpério",
+    "baby blues",
+    "medo do parto",
+    "medo de perder",
+    "aborto",
+    "sangramento",
+    "gestação de risco",
+    "prematuridade",
+    "me bateu",
+    "me agrediu",
+    "apanhei",
+    "ameaça",
+    "ameaçou",
+    "tenho medo dele",
+    "não me deixa sair",
+    "controla",
+    "me humilha",
+    "violência",
+    "abuso",
+    "fadiga",
+    "hormônio",
+    "menopausa",
+    "tpm",
+    "ciclo irregular",
+]
+
+NEGATIVE_PATTERNS = [
+    r"\bnão\s+\w+",
+    r"\bnunca\b",
+    r"\bnada\b",
+    r"\bsempre\s+(triste|mal|cansad[oa]|sozinh[oa])",
+]
+
+HESITATION_MARKERS = ["é...", "hum", "hmm", "tipo", "assim", "né", "ah", "ahn"]
 
 
 class AudioAnalyzer:
-    """Análise de áudio para detectar sinais de depressão na fala"""
-
-    def __init__(self, video_path):
+    def __init__(self, video_path: str):
         self.video_path = video_path
-        self.audio_path = None
+        self.audio_path = video_path.rsplit(".", 1)[0] + "_audio.wav"
         self.results = {
-            'transcricao': '',
-            'palavras_chave_depressao': [],
-            'score_depressao_fala': 0,
-            'indicadores_linguisticos': [],
-            'caracteristicas_voz': {}
+            "transcricao": "",
+            "keywords_encontradas": [],
+            "score_depressao": 0,
+            "indicadores": [],
+            "hesitacoes": 0,
+            "features_voz": {},
         }
 
-        # Palavras e frases indicadoras de depressão
-        self.depression_keywords = [
-            # Sentimentos negativos
-            'triste', 'tristeza', 'deprimido', 'deprimida', 'deprimente',
-            'sozinho', 'sozinha', 'solidão', 'vazio', 'vazia',
-            'desesperado', 'desesperada', 'sem esperança', 'desespero',
-            'cansado', 'cansada', 'exausto', 'exausta', 'esgotado', 'esgotada',
-
-            # Pensamentos negativos
-            'não consigo', 'não aguento', 'não dá mais',
-            'sem sentido', 'sem propósito', 'inútil',
-            'fracasso', 'fracassado', 'fracassada',
-            'culpa', 'culpado', 'culpada',
-
-            # Isolamento
-            'ninguém entende', 'ninguém se importa', 'sozinho no mundo',
-            'me afastar', 'isolar', 'isolamento',
-
-            # Sintomas físicos
-            'não durmo', 'insônia', 'não como', 'sem apetite',
-            'dor', 'corpo pesado', 'sem energia',
-
-            # Ideação
-            'desistir', 'acabar com tudo', 'sumir',
-
-            # Emoções
-            'angústia', 'ansiedade', 'medo', 'pavor',
-            'choro', 'chorando', 'chorar'
-        ]
-
-        # Padrões linguísticos
-        self.negative_patterns = [
-            r'\bnão\s+\w+',  # negações
-            r'\bnunca\b',
-            r'\bnada\b',
-            r'\bsempre\s+(triste|mal|cansado|sozinho)',
-        ]
-
-    def extract_audio(self):
-        """Extrai áudio do vídeo"""
-        try:
-            audio_path = self.video_path.replace('.mp4', '_audio.wav')
-
-            # Usa ffmpeg para extrair áudio
-            command = [
-                'ffmpeg',
-                '-i', self.video_path,
-                '-vn',  # sem vídeo
-                '-acodec', 'pcm_s16le',  # codec de áudio
-                '-ar', '16000',  # taxa de amostragem
-                '-ac', '1',  # mono
-                '-y',  # sobrescreve
-                audio_path
-            ]
-
-            subprocess.run(command, check=True, capture_output=True)
-            self.audio_path = audio_path
-            print(f"Áudio extraído: {audio_path}")
+    def _extract_audio(self) -> bool:
+        if os.path.exists(self.audio_path):
+            log.info("Áudio já extraído: %s", self.audio_path)
             return True
-
-        except subprocess.CalledProcessError as e:
-            print(f"Erro ao extrair áudio: {e}")
-            return False
-        except FileNotFoundError:
-            print("AVISO: ffmpeg não encontrado. Instalando dependências necessárias...")
-            print(
-                "Por favor, instale o ffmpeg manualmente ou use: pip install imageio-ffmpeg")
-            return False
-
-    def transcribe_audio(self):
-        """Transcreve o áudio usando speech recognition"""
-        if not self.audio_path or not os.path.exists(self.audio_path):
-            print("Áudio não encontrado. Extraindo áudio primeiro...")
-            if not self.extract_audio():
-                return ""
-
         try:
-            import speech_recognition as sr
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-i",
+                    self.video_path,
+                    "-vn",
+                    "-acodec",
+                    "pcm_s16le",
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-y",
+                    self.audio_path,
+                ],
+                check=True,
+                capture_output=True,
+            )
+            log.info("Áudio extraído: %s", self.audio_path)
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log.error("Falha ao extrair áudio: %s", e)
+            return False
 
-            recognizer = sr.Recognizer()
-
-            # Lê o arquivo de áudio
-            with sr.AudioFile(self.audio_path) as source:
-                print("Carregando áudio...")
-                audio = recognizer.record(source)
-
-            print("Transcrevendo áudio (isso pode levar alguns minutos)...")
-
-            # Tenta transcrever usando o Google Speech Recognition (gratuito)
-            try:
-                text = recognizer.recognize_google(audio, language='pt-BR')
-                self.results['transcricao'] = text
-                print("Transcrição concluída!")
-                return text
-            except sr.UnknownValueError:
-                print("Não foi possível entender o áudio.")
-                return ""
-            except sr.RequestError as e:
-                print(f"Erro no serviço de reconhecimento: {e}")
-                return ""
-
+    def _transcribe(self) -> str:
+        try:
+            import whisper
         except ImportError:
-            print("AVISO: SpeechRecognition não instalado.")
-            print("Para análise de áudio, instale: pip install SpeechRecognition")
-            return ""
-        except Exception as e:
-            print(f"Erro na transcrição: {e}")
+            log.error("openai-whisper não instalado. Execute: pip install openai-whisper")
             return ""
 
-    def analyze_text_for_depression(self, text):
-        """Analisa o texto transcrito para sinais de depressão"""
+        import ssl
+
+        import certifi
+
+        ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+
+        log.info("Transcrevendo com Whisper (modelo base)...")
+        model = whisper.load_model("base")
+        result = model.transcribe(self.audio_path, language="pt")
+        text = result.get("text", "")
+        self.results["transcricao"] = text
+        log.info("Transcrição concluída (%d caracteres)", len(text))
+        return text
+
+    def _analyze_text(self, text: str):
         if not text:
             return
-
-        text_lower = text.lower()
+        lower = text.lower()
         score = 0
-        found_keywords = []
-        indicators = []
+        found = []
 
-        # Procura palavras-chave
-        for keyword in self.depression_keywords:
-            if keyword in text_lower:
-                found_keywords.append(keyword)
+        for kw in DEPRESSION_KEYWORDS:
+            if kw in lower:
+                found.append(kw)
                 score += 2
 
-        # Analisa padrões linguísticos
-        for pattern in self.negative_patterns:
-            matches = re.findall(pattern, text_lower)
+        for pat in NEGATIVE_PATTERNS:
+            matches = re.findall(pat, lower)
             if matches:
-                indicators.append(f"Padrão negativo: {pattern}")
+                self.results["indicadores"].append(f"Padrão negativo: {pat}")
                 score += len(matches)
 
-        # Analisa tom geral
-        negative_words = ['não', 'nunca', 'nada', 'nenhum', 'nem']
-        negative_count = sum(text_lower.count(word) for word in negative_words)
+        neg_words = ["não", "nunca", "nada", "nenhum", "nem"]
+        neg_count = sum(lower.count(w) for w in neg_words)
+        if neg_count > 5:
+            self.results["indicadores"].append(f"Alto uso de negações ({neg_count}x)")
+            score += int(neg_count * 0.5)
 
-        if negative_count > 5:
-            indicators.append("Alto uso de palavras negativas")
-            score += negative_count * 0.5
-
-        # Analisa primeira pessoa (foco em si mesmo)
-        first_person = ['eu', 'me', 'meu', 'minha', 'mim']
-        first_person_count = sum(text_lower.count(word)
-                                 for word in first_person)
-
-        if first_person_count > 10:
-            indicators.append(
-                "Foco excessivo em si mesmo (possível ruminação)")
+        first_person = ["eu ", " me ", " meu ", " minha ", " mim "]
+        fp_count = sum(lower.count(w) for w in first_person)
+        if fp_count > 10:
+            self.results["indicadores"].append("Foco excessivo em si (possível ruminação)")
             score += 2
 
-        self.results['palavras_chave_depressao'] = found_keywords
-        self.results['score_depressao_fala'] = score
-        self.results['indicadores_linguisticos'] = indicators
+        hesitations = sum(lower.count(h) for h in HESITATION_MARKERS)
+        if hesitations > 5:
+            self.results["indicadores"].append(f"Hesitação frequente ({hesitations}x)")
+            score += min(hesitations, 5)
+        self.results["hesitacoes"] = hesitations
 
-    def analyze_audio_features(self):
-        """Analisa características vocais (tom, velocidade, etc.)"""
-        # Esta funcionalidade requer bibliotecas mais avançadas como librosa
-        # Por enquanto, retorna um placeholder
+        self.results["keywords_encontradas"] = found
+        self.results["score_depressao"] = score
+
+    def _analyze_voice(self):
         try:
             import librosa
-            import numpy as np
-
-            if not self.audio_path or not os.path.exists(self.audio_path):
-                return
-
-            # Carrega áudio
-            y, sr = librosa.load(self.audio_path, sr=16000)
-
-            # Analisa características
-            # Pitch (tom)
-            pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
-            pitch_mean = np.mean(pitches[pitches > 0])
-
-            # Energia
-            energy = np.sum(librosa.feature.rms(y=y))
-
-            # Taxa de zero crossing (pode indicar qualidade/emoção da voz)
-            zcr = np.mean(librosa.feature.zero_crossing_rate(y))
-
-            self.results['caracteristicas_voz'] = {
-                'pitch_medio': float(pitch_mean) if not np.isnan(pitch_mean) else 0,
-                'energia': float(energy),
-                'zero_crossing_rate': float(zcr)
-            }
-
-            # Interpretação
-            if pitch_mean < 120:
-                self.results['indicadores_linguisticos'].append(
-                    "Tom de voz baixo (pode indicar baixa energia/tristeza)"
-                )
-                self.results['score_depressao_fala'] += 1
-
-            if energy < 100:
-                self.results['indicadores_linguisticos'].append(
-                    "Baixa energia vocal"
-                )
-                self.results['score_depressao_fala'] += 1
-
         except ImportError:
-            print("AVISO: librosa não instalado. Análise vocal avançada desabilitada.")
-            print("Para análise vocal, instale: pip install librosa")
-        except Exception as e:
-            print(f"Erro na análise de características vocais: {e}")
+            log.warning("librosa não instalado — análise vocal desabilitada")
+            return
 
-    def analyze(self, transcription_text=None):
-        """Executa análise completa do áudio"""
-        print("\n" + "="*80)
-        print("ANÁLISE DE ÁUDIO")
-        print("="*80)
+        y, sr = librosa.load(self.audio_path, sr=16000)
 
-        # Se transcrição não foi fornecida, tenta transcrever
-        if transcription_text is None:
-            # Extrai áudio
-            if self.extract_audio():
-                # Transcreve
-                transcription_text = self.transcribe_audio()
+        pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
+        pitch_vals = pitches[pitches > 0]
+        pitch_mean = float(np.mean(pitch_vals)) if len(pitch_vals) > 0 else 0.0
+
+        energy = float(np.sum(librosa.feature.rms(y=y)))
+        zcr = float(np.mean(librosa.feature.zero_crossing_rate(y)))
+
+        intervals = librosa.effects.split(y, top_db=30)
+        gaps = []
+        for i in range(1, len(intervals)):
+            gap = (intervals[i][0] - intervals[i - 1][1]) / sr
+            if gap > 1.0:
+                gaps.append(gap)
+
+        self.results["features_voz"] = {
+            "pitch_medio": round(pitch_mean, 1),
+            "energia": round(energy, 2),
+            "zero_crossing_rate": round(zcr, 4),
+            "pausas_longas": len(gaps),
+        }
+
+        if pitch_mean > 0 and pitch_mean < 120:
+            self.results["indicadores"].append("Tom de voz baixo (baixa energia/tristeza)")
+            self.results["score_depressao"] += 1
+        if energy < 100:
+            self.results["indicadores"].append("Baixa energia vocal")
+            self.results["score_depressao"] += 1
+        if len(gaps) > 5:
+            self.results["indicadores"].append(f"Muitas pausas longas ({len(gaps)}x)")
+            self.results["score_depressao"] += 2
+
+    def analyze(self, transcription: str = None) -> dict:
+        if transcription:
+            self.results["transcricao"] = transcription
         else:
-            self.results['transcricao'] = transcription_text
+            if self._extract_audio():
+                transcription = self._transcribe()
 
-        # Analisa texto
-        if transcription_text:
-            print("\nAnalisando conteúdo da fala...")
-            self.analyze_text_for_depression(transcription_text)
-
-            # Analisa características vocais
-            print("Analisando características vocais...")
-            self.analyze_audio_features()
+        if transcription:
+            self._analyze_text(transcription)
+            self._analyze_voice()
         else:
-            print("Sem transcrição disponível para análise.")
+            log.warning("Sem transcrição disponível")
 
         return self.results
 
-    def generate_report(self, output_path='audio_analysis_report.json'):
-        """Gera relatório da análise de áudio"""
+    def generate_report(self, output_path: str = "relatorio_audio.json") -> dict:
+        r = self.results
         report = {
-            'arquivo_analisado': self.video_path,
-            'transcricao': self.results['transcricao'],
-            'analise_fala': {
-                'score_depressao': self.results['score_depressao_fala'],
-                'nivel': self._interpret_speech_score(
-                    self.results['score_depressao_fala']
-                ),
-                'palavras_chave_encontradas': self.results['palavras_chave_depressao'],
-                'indicadores_linguisticos': self.results['indicadores_linguisticos'],
-                'caracteristicas_voz': self.results['caracteristicas_voz'],
-                'recomendacao': self._get_speech_recommendation(
-                    self.results['score_depressao_fala']
-                )
-            }
+            "arquivo": self.video_path,
+            "transcricao": r["transcricao"][:500] + ("..." if len(r["transcricao"]) > 500 else ""),
+            "analise_fala": {
+                "score_depressao": r["score_depressao"],
+                "nivel": self._nivel(r["score_depressao"]),
+                "keywords": r["keywords_encontradas"][:15],
+                "indicadores": r["indicadores"],
+                "hesitacoes": r["hesitacoes"],
+                "features_voz": r["features_voz"],
+            },
         }
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
 
-        # Salva JSON
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(report, f, indent=4, ensure_ascii=False)
-
-        # Gera texto
-        self._generate_text_report(
-            report, output_path.replace('.json', '.txt'))
-
+        txt = output_path.replace(".json", ".txt")
+        self._write_txt(report, txt)
+        log.info("Relatório áudio: %s", output_path)
         return report
 
-    def _interpret_speech_score(self, score):
-        """Interpreta o score de depressão na fala"""
+    @staticmethod
+    def _nivel(score):
         if score < 5:
-            return 'Baixo - Poucos indicadores na fala'
-        elif score < 15:
-            return 'Moderado - Alguns indicadores presentes'
-        else:
-            return 'Alto - Múltiplos indicadores de depressão na fala'
+            return "Baixo"
+        return "Moderado" if score < 15 else "Alto"
 
-    def _get_speech_recommendation(self, score):
-        """Retorna recomendação baseada na análise de fala"""
-        if score < 5:
-            return 'Não foram detectados sinais significativos de depressão na fala.'
-        elif score < 15:
-            return 'Alguns indicadores linguísticos sugerem possível tristeza ou desânimo. Recomenda-se atenção e diálogo.'
-        else:
-            return 'ATENÇÃO: Múltiplos indicadores de depressão detectados na fala. Recomenda-se URGENTEMENTE avaliação profissional de saúde mental. CVV: 188 (24h)'
-
-    def _generate_text_report(self, report, output_path):
-        """Gera relatório em texto"""
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write("="*80 + "\n")
-            f.write("RELATÓRIO DE ANÁLISE DE ÁUDIO/FALA\n")
-            f.write("="*80 + "\n\n")
-
-            f.write(f"Arquivo: {report['arquivo_analisado']}\n\n")
-
-            f.write("-"*80 + "\n")
-            f.write("TRANSCRIÇÃO\n")
-            f.write("-"*80 + "\n")
-            if report['transcricao']:
-                f.write(report['transcricao'] + "\n\n")
-            else:
-                f.write("Transcrição não disponível.\n\n")
-
-            f.write("-"*80 + "\n")
-            f.write("ANÁLISE DE INDICADORES DE DEPRESSÃO NA FALA\n")
-            f.write("-"*80 + "\n")
-            f.write(f"Score: {report['analise_fala']['score_depressao']}\n")
-            f.write(f"Nível: {report['analise_fala']['nivel']}\n\n")
-
-            if report['analise_fala']['palavras_chave_encontradas']:
-                f.write("Palavras-chave relacionadas à depressão encontradas:\n")
-                for palavra in report['analise_fala']['palavras_chave_encontradas'][:10]:
-                    f.write(f"  • {palavra}\n")
-                if len(report['analise_fala']['palavras_chave_encontradas']) > 10:
-                    f.write(
-                        f"  ... e mais {len(report['analise_fala']['palavras_chave_encontradas']) - 10}\n")
-                f.write("\n")
-
-            if report['analise_fala']['indicadores_linguisticos']:
-                f.write("Indicadores Linguísticos:\n")
-                for ind in report['analise_fala']['indicadores_linguisticos']:
+    @staticmethod
+    def _write_txt(report, path):
+        sep = "=" * 72
+        a = report["analise_fala"]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"{sep}\nRELATÓRIO DE ANÁLISE DE ÁUDIO\n{sep}\n\n")
+            f.write(f"Arquivo: {report['arquivo']}\n\n")
+            f.write(f"--- TRANSCRIÇÃO (trecho) ---\n{report['transcricao']}\n\n")
+            f.write(f"--- ANÁLISE ---\nScore: {a['score_depressao']}  Nível: {a['nivel']}\n")
+            f.write(f"Hesitações: {a['hesitacoes']}\n\n")
+            if a["keywords"]:
+                f.write("Palavras-chave:\n")
+                for kw in a["keywords"]:
+                    f.write(f"  • {kw}\n")
+            if a["indicadores"]:
+                f.write("\nIndicadores:\n")
+                for ind in a["indicadores"]:
                     f.write(f"  • {ind}\n")
-                f.write("\n")
-
-            if report['analise_fala']['caracteristicas_voz']:
-                f.write("Características Vocais:\n")
-                for chave, valor in report['analise_fala']['caracteristicas_voz'].items():
-                    f.write(f"  • {chave}: {valor:.2f}\n")
-                f.write("\n")
-
-            f.write(
-                f"Recomendação: {report['analise_fala']['recomendacao']}\n\n")
-
-            f.write("="*80 + "\n")
-
-
-def main():
-    """Função principal"""
-    video_path = 'data/YTDown.com_YouTube_Media_5t_FoFzVcsA_001_720p.mp4'
-
-    analyzer = AudioAnalyzer(video_path)
-    results = analyzer.analyze()
-
-    if results['transcricao']:
-        report = analyzer.generate_report()
-        print("\nRelatório de áudio salvo!")
-    else:
-        print("\nNão foi possível completar a análise de áudio.")
-
-
-if __name__ == "__main__":
-    main()
+            if a["features_voz"]:
+                f.write("\nFeatures vocais:\n")
+                for k, v in a["features_voz"].items():
+                    f.write(f"  • {k}: {v}\n")
+            f.write(f"\n{sep}\n")
