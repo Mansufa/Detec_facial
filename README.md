@@ -1,116 +1,210 @@
-# Sistema Multimodal de Triagem — Saúde da Mulher
+# 🎯 Sistema Multimodal de Triagem — Saúde da Mulher
 
-Sistema de análise multimodal (vídeo + áudio) para detecção precoce de sinais de **depressão**, **violência doméstica** e **problemas de saúde**, voltado para o contexto da saúde feminina.
+Sistema inteligente de análise multimodal (vídeo + áudio) para **detecção precoce** de sinais de depressão, violência doméstica e problemas de saúde da mulher.
 
-> **Triagem automatizada** — NÃO substitui avaliação profissional.
+> ⚠️ **Ferramenta de triagem automatizada** — NÃO substitui avaliação profissional por especialista.
 
-## Objetivos Atendidos (POS TECH — Tech Challenge Fase 4)
+## 🎓 Objetivos (POS TECH — Tech Challenge Fase 4)
 
-| # | Objetivo | Como é atendido |
-|---|----------|-----------------|
-| 2 | Identificar sinais de violência doméstica | Detecção de hematomas/marcas via YOLOv8 + análise HSV |
-| 3 | Monitorar bem-estar psicológico feminino | Expressões faciais (MediaPipe) + análise linguística (Whisper) |
-| 5 | Detecção de anomalias para monitoramento preventivo | Pipeline automatizado com sistema de alertas por nível de risco |
+| # | Objetivo | Implementação |
+|---|----------|---|
+| 2 | Identificar sinais de violência doméstica | Detecção de hematomas/marcas via YOLOv8 + análise de cor HSV |
+| 3 | Monitorar bem-estar psicológico feminino | Análise de expressões faciais (MediaPipe) + processamento de linguagem (Whisper) |
+| 5 | Detecção de anomalias para monitoramento preventivo | Pipeline automatizado com sistema de alertas estratificado por nível de risco |
 
-## Arquitetura / Fluxo Multimodal
+## 🔄 Arquitetura — Fluxo Multimodal
 
 ```
-Vídeo (MP4)
+Arquivo de vídeo (MP4)
   │
-  ├─► YOLOv8 (detecção de pessoa no frame)
-  │     └─► MediaPipe FaceMesh (landmarks faciais)
+  ├─► YOLOv8n (detecção de pessoa no frame)
+  │     └─► MediaPipe FaceMesh (468 landmarks faciais)
   │           ├─► Análise de expressão (eye aspect ratio, mouth ratio)
-  │           └─► Detecção de anomalias na pele (HSV: hematomas, marcas)
+  │           └─► HSV (detecção de hematomas, marcas de varizes)
   │
   ├─► FFmpeg (extração de áudio)
-  │     └─► Whisper base (transcrição local PT-BR)
-  │           ├─► Análise linguística (keywords depressão/violência/pós-parto)
-  │           └─► Detecção de hesitações e padrões negativos
+  │     └─► Whisper base (transcrição local em português)
+  │           ├─► Análise linguística (keywords: depressão, violência, pós-parto)
+  │           └─► Padrões vocais (hesitações, ritmo de fala)
   │
-  └─► librosa (features vocais: pitch, energia, pausas)
-        └─► Indicadores de tristeza/fadiga vocal
+  └─► librosa (análise de features vocais)
+        ├─► Pitch (frequência fundamental)
+        ├─► Energia (intensidade da voz)
+        └─► Pausas e silêncios
 
-  Fusão Multimodal: score_visual × 0.4 + score_audio × 0.6
+  ╔═══════════════════════════════════════════════════════════╗
+  ║  FUSÃO MULTIMODAL                                         ║
+  ║  Score Final = score_visual × 0.4 + score_audio × 0.6   ║
+  ║  Classificação: BAIXO / MODERADO / ALTO / MUITO ALTO     ║
+  ╚═══════════════════════════════════════════════════════════╝
+  
   └─► Relatório integrado com nível de risco e recomendações
 ```
 
-## Modelos Utilizados
+## 🧠 Modelos e Tecnologias
 
-| Modelo | Tipo de dado | Função |
-|--------|-------------|--------|
-| **YOLOv8n** (ultralytics) | Vídeo | Detecção de pessoas no frame (pré-filtro) |
-| **MediaPipe FaceMesh** | Vídeo | 468 landmarks faciais para análise de expressão |
-| **Haar Cascade** (OpenCV) | Vídeo | Fallback quando MediaPipe falha |
-| **Whisper base** (OpenAI) | Áudio | Transcrição local em português |
-| **librosa** | Áudio | Extração de features vocais (pitch, energia, ZCR) |
-| **Rule-based NLP** | Texto | Detecção de palavras-chave e padrões linguísticos |
+| Modelo | Tipo | Função |
+|--------|------|--------|
+| **YOLOv8n** (ultralytics) | Visão | Detecção de pessoa no frame (pré-filtro) |
+| **MediaPipe FaceMesh** | Visão | 468 landmarks faciais para análise de expressão |
+| **Haar Cascade** (OpenCV) | Visão | Fallback automático quando MediaPipe falha |
+| **Whisper base** (OpenAI) | Áudio | Transcrição local em português (offline) |
+| **librosa** | Áudio | Extração de features vocais (pitch, energia, zero crossing rate) |
+| **Rule-based NLP** | Processamento | Detecção de keywords e padrões linguísticos |
 
-## Requisitos
+## 📋 Requisitos do Sistema
 
-- Python 3.11+
-- FFmpeg instalado no sistema (`brew install ffmpeg` no macOS)
-- ~500MB de espaço para modelos (YOLOv8n + Whisper base)
+- **Python:** 3.11 ou superior
+- **FFmpeg:** Necessário para processing de áudio (instale via gerenciador de pacotes)
+- **Espaço em disco:** ~500 MB para modelos (YOLOv8n + Whisper base)
+- **Memória RAM:** Mínimo 4 GB recomendado
 
-## Instalação (macOS)
+### Instalação de dependências do sistema
 
+**Linux (Ubuntu/Debian):**
 ```bash
-# 1. Clonar o repositório
+sudo apt-get update
+sudo apt-get install ffmpeg python3-dev
+```
+
+**macOS (com Homebrew):**
+```bash
+brew install ffmpeg
+```
+
+**Windows:**
+Baixe FFmpeg em https://ffmpeg.org/download.html ou use `choco install ffmpeg`
+
+## 🚀 Instalação e Setup
+
+### 1. Clonar o repositório
+```bash
 git clone <repo-url>
 cd Detec_facial
-
-# 2. Criar e ativar ambiente virtual
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 3. Instalar FFmpeg (se não tiver)
-brew install ffmpeg
-
-# 4. Instalar dependências Python
-pip install -r requirements.txt
-
-# 5. Colocar o vídeo na pasta data/
-mkdir -p data
-# copie o vídeo .mp4 para data/
 ```
 
-## Execução
-
+### 2. Criar ambiente virtual
 ```bash
-# Análise completa (vídeo + áudio)
-python main_analysis.py
-
-# Apenas vídeo
-python -c "
-from video_analysis import VideoAnalyzer
-v = VideoAnalyzer('data/seu_video.mp4')
-v.analyze()
-v.generate_report()
-"
+python3 -m venv venv
+source venv/bin/activate  # Linux/macOS
+# ou, no Windows:
+# venv\Scripts\activate
 ```
 
-## Relatórios Gerados
+### 3. Instalar dependências Python
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+# ou via pyproject.toml:
+# pip install -e .
+```
+
+### 4. Preparar dados de entrada
+```bash
+mkdir -p data
+# Coloque seu vídeo .mp4 na pasta data/
+# Exemplo: data/video_exemplo.mp4
+```
+
+### 5. Baixar modelos (primeira execução)
+Os modelos são baixados automaticamente na primeira execução:
+- YOLOv8n: ~35 MB
+- Whisper base: ~140 MB
+
+## ▶️ Como Usar
+
+### Análise Completa (Vídeo + Áudio)
+```bash
+python src/main_analysis.py
+```
+Processa o vídeo em `data/` e gera 3 relatórios:
+- `relatorio_video.json/txt` — Análise visual
+- `relatorio_audio.json/txt` — Análise de voz
+- `relatorio_integrado.json/txt` — Resultado final com risco e recomendações
+
+### Apenas Análise de Vídeo
+```bash
+# No Python intereativo ou script:
+from src.video_analysis import VideoAnalyzer
+analyzer = VideoAnalyzer('data/seu_video.mp4')
+report = analyzer.analyze()
+analyzer.generate_report()
+```
+
+### Apenas Análise de Áudio
+```bash
+from src.audio_analysis import AudioAnalyzer
+analyzer = AudioAnalyzer('data/seu_video.mp4')
+report = analyzer.analyze()
+analyzer.generate_report()
+```
+
+### Parâmetros customizáveis
+Se quiser ajustar pesos e limiares, edite as constantes em `src/main_analysis.py`:
+
+```python
+WEIGHT_VIDEO = 0.4  # Peso da análise visual
+WEIGHT_AUDIO = 0.6  # Peso da análise de áudio
+```
+
+## 📊 Relatórios Gerados
 
 | Arquivo | Conteúdo |
 |---------|----------|
-| `relatorio_video.json/txt` | Detalhes da análise visual (expressões, hematomas, marcas) |
-| `relatorio_audio.json/txt` | Transcrição, keywords, features vocais |
-| `relatorio_integrado.json/txt` | Fusão multimodal com score final e recomendações |
+| `relatorio_video.json` | Análise frame-by-frame: expressões, hematomas, variações de cor |
+| `relatorio_video.txt` | Versão legível com indicadores e resumo visual |
+| `relatorio_audio.json` | Transcrição completa, keywords, features vocais (pitch, energia) |
+| `relatorio_audio.txt` | Versão legível da análise de voz |
+| `relatorio_integrado.json` | **Score final**, nível de risco, recomendações acionáveis |
+| `relatorio_integrado.txt` | Resumo formatado com orientações para profissional |
 
-## Estrutura do Projeto
+### Exemplo de saída (relatorio_integrado.txt):
+```
+══════════════════════════════════════════════════════════
+             RELATÓRIO INTEGRADO — RESULTADO
+══════════════════════════════════════════════════════════
+
+Score Visual: 6.2
+Score Áudio: 8.1
+Score Final: 7.4
+
+CLASSIFICAÇÃO: MODERADO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RECOMENDAÇÕES:
+✓ ATENÇÃO: Alguns indicadores presentes
+✓ Converse com pessoas de confiança
+✓ Considere apoio psicológico
+✓ CVV: 188 (24h, gratuito)
+```
+
+## 📁 Estrutura do Projeto
 
 ```
 Detec_facial/
-├── main_analysis.py      # Orquestrador: fusão multimodal
-├── video_analysis.py     # YOLOv8 + MediaPipe + detecção de anomalias
-├── audio_analysis.py     # Whisper + librosa + análise linguística
-├── requirements.txt      # Dependências Python
-├── pyproject.toml        # Metadados do projeto
-├── data/                 # Vídeos para análise (não versionados)
-├── tech-challenger.md    # Enunciado do Tech Challenge
-└── README.md             # Este arquivo
+├── src/
+│   ├── main_analysis.py          # Orquestrador: fusão de scores visuais + áudio
+│   ├── video_analysis.py         # YOLOv8 + MediaPipe + detecção de anomalias (HSV)
+│   └── audio_analysis.py         # Whisper + librosa + análise linguística
+├── data/                         # Vídeos para análise (não versionados no git)
+├── __pycache__/                  # Cache Python (gerado automaticamente)
+├── main_analysis.py              # Legacy — utilizar src/main_analysis.py
+├── pyproject.toml                # Metadados do projeto e dependências
+├── README.md                     # Este arquivo
+├── requirements.txt              # Dependências Python (compatível com pip)
+├── tech-challenger.md            # Enunciado original do Tech Challenge
+├── yolov8n.pt                    # Modelo YOLOv8n (baixado automaticamente)
+├── relatorio_*.json/txt          # Saídas geradas pela análise
+└── .gitignore                    # Arquivos ignorados pelo git
 ```
 
-## Execução Local vs. Nuvem
+### Notas sobre a estrutura:
+- **src/** contém o código principal e está pronto em produção
+- **data/** é onde você coloca vídeos de entrada (não é versionado)
+- **requirements.txt** é gerado a partir de pyproject.toml (use um ou outro)
+- Relatórios são salvos na raiz do projeto para fácil acesso
+
+## 🌐 Execução Local vs. Nuvem
 
 **Tudo roda 100% local**, sem necessidade de serviços pagos:
 
@@ -121,14 +215,55 @@ Detec_facial/
 | Análise de sentimento | Azure Text Analytics | **Rule-based NLP** (custom) |
 | Face detection | Azure Face API | **MediaPipe** (Google, gratuito) |
 
-## Linhas de Apoio
+## 🆘 Recursos de Apoio e Suporte
 
-- **CVV** (saúde mental): 188 (24h, gratuito)
-- **Central da Mulher** (violência): 180 (24h, gratuito)
-- **SAMU**: 192
-- **Disque Direitos Humanos**: 100
+Se você ou alguém que conhece está em situação de risco, procure ajuda:
 
-## O que foi alterado em relação à versão original
+- 🧠 **CVV** (Valorização da Vida) — Prevenção do suicídio e saúde mental
+  - Telefone: **188** | 24h | Chamada gratuita
+  
+- 👩 **Central de Atendimento à Mulher** — Violência doméstica e direitos
+  - Telefone: **180** | 24h | Ligação gratuita
+  
+- 🚑 **SAMU** — Emergências médicas
+  - Telefone: **192** | 24h | Serviço de ambulância
+  
+- ⚖️ **Disque Direitos Humanos** — Denúncias de violação de direitos
+  - Telefone: **100** | 24h | Ligação gratuita
+
+> **⚠️ AVISO IMPORTANTE:** Este sistema é uma **ferramenta de triagem** e não substitui avaliação profissional. Se você está em situação de emergência, ligue imediatamente para o 192 (SAMU) ou 180 (Central da Mulher).
+
+## 🔧 Troubleshooting
+
+### Erro: "Cannot import name 'VideoAnalyzer'"
+```bash
+# Certifique-se de estar rodando no diretório raiz:
+cd /home/turt/Fiap/Tech_challenge_4/Detec_facial
+python -m src.main_analysis  # ou python src/main_analysis.py
+```
+
+### Erro: "FFmpeg not found"
+```bash
+# Instale FFmpeg no seu sistema operacional (veja seção Requisitos)
+which ffmpeg  # Verifique se está instalado
+```
+
+### Memória insuficiente
+Se receber erro de OOM ao processar vídeos:
+- Reduza a qualidade do vídeo de entrada
+- Processe um vídeo menor para teste
+- Aumente a RAM disponível do sistema
+
+### Modelos não baixaram
+Os modelos são baixados automaticamente na primeira execução. Caso falhe:
+```bash
+yolo detect train model=yolov8n.pt  # Força download do YOLOv8
+python -c "import whisper; whisper.load_model('base')"  # Força download de Whisper
+```
+
+## Histórico de Mudanças
+
+### O que foi alterado em relação à versão original
 
 ### Problemas encontrados na versão anterior
 
