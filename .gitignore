@@ -19,6 +19,7 @@ ENV/
 # Relatórios gerados
 relatorio_*.json
 relatorio_*.txt
+alertas_equipe_medica.*
 analysis_report.*
 audio_analysis_report.*
 RELATORIO_FINAL_INTEGRADO.*

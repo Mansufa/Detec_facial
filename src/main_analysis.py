@@ -4,8 +4,8 @@ import os
 import sys
 from datetime import datetime
 
-from src.audio_analysis import AudioAnalyzer
-from src.video_analysis import VideoAnalyzer
+from audio_analysis import AudioAnalyzer
+from video_analysis import VideoAnalyzer
 
 logging.basicConfig(
     level=logging.INFO,
