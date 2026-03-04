@@ -296,3 +296,4 @@ python -c "import whisper; whisper.load_model('base')"  # Força download de Whi
 | Relatórios | `analysis_report.json` | `relatorio_video`, `relatorio_audio`, `relatorio_integrado` (JSON + TXT) |
 | Recursos de apoio | Não incluía | CVV 188, Central da Mulher 180, SAMU 192 |
 | Total de linhas | 1.749 (4 arquivos) | **759** (3 arquivos) — redução de 57% |
+
